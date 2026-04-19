@@ -1,0 +1,86 @@
+version: '3.9'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: production
+    container_name: cinemate-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - PINECONE_API_KEY=${PINECONE_API_KEY}
+      - PINECONE_ENVIRONMENT=${PINECONE_ENVIRONMENT:-us-east-1}
+      - PINECONE_INDEX_NAME=${PINECONE_INDEX_NAME:-cinemate-movies}
+      - REDIS_URL=redis://redis:6379
+      - SECRET_KEY=${SECRET_KEY:-change-me-please}
+      - TMDB_API_KEY=${TMDB_API_KEY:-}
+      - DEBUG=false
+      - ENVIRONMENT=production
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - cinemate-net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: production
+    container_name: cinemate-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - cinemate-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: cinemate-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - cinemate-net
+
+  # Optional: Redis UI for development
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: cinemate-redis-ui
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+    profiles:
+      - dev
+    networks:
+      - cinemate-net
+
+volumes:
+  redis-data:
+
+networks:
+  cinemate-net:
+    driver: bridge
