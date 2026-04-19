@@ -1,7 +1,7 @@
 # CineMate AI — GenAI Movie Recommendation System
 
 > Hybrid semantic search + collaborative filtering + LLM explanations  
-> **100% free stack** — no OpenAI required
+
 
 ---
 
