@@ -1,111 +1,65 @@
-# CineMate AI — GenAI Movie Recommendation System
+# CineMate AI
 
-> Hybrid semantic search + collaborative filtering + LLM explanations  
+A movie recommendation engine that combines semantic search, collaborative filtering, and LLM-generated explanations. Built this to actually understand what someone means by "something like Inception but not as confusing" rather than just matching keywords.
 
+## What it uses
 
----
+Everything here runs on free tiers, so you can clone it and have it working without pulling out a credit card:
 
-## Free Services Used
+- **sentence-transformers** (`all-MiniLM-L6-v2`) for embeddings, runs locally on CPU
+- **Groq** for LLaMA-3.1-8B, used for both parsing queries and writing explanations
+- **Pinecone** free starter tier as the vector index (handles 10K+ movies fine)
+- **TMDB API** for movie metadata and posters
+- **Redis** for caching so repeat queries come back fast
 
-| Service | Purpose | Cost |
-|---------|---------|------|
-| `sentence-transformers` | Local embeddings (runs on your CPU) | **Free** |
-| Groq API | LLaMA-3.1-8B for query parsing + explanations | **Free tier** |
-| Pinecone | Vector index (10K+ movie vectors) | **Free starter** |
-| TMDB API | Movie metadata + poster images | **Free forever** |
-| Redis | Response caching | **Free (Docker)** |
+## How it works
 
----
+A query comes in as plain English. Groq's LLaMA model pulls out the genres, mood, and themes from it. That gets embedded with sentence-transformers and searched against the Pinecone index using cosine similarity. Once we have candidates, we re-rank them based on the user's watch history to bias toward what they've actually liked before. Then Groq writes a short explanation for each pick, something like why it fits what they asked for. Redis caches the whole response so if someone runs a similar query again it comes back in under 200ms instead of round-tripping through two LLM calls.
 
-## Architecture
-
-```
-User Query (natural language)
-        │
-        ▼
-  Groq LLaMA-3.1        ← Extracts genres, mood, themes (free API)
-        │
-        ▼
-  sentence-transformers  ← all-MiniLM-L6-v2, 384-dim (runs locally, free)
-        │
-        ▼
-  Pinecone ANN Search    ← Cosine similarity over 10K+ movie vectors (free tier)
-        │
-        ▼
-  CF Re-ranking          ← Boosts results matching user's watch history
-        │
-        ▼
-  Groq LLaMA-3.1        ← Personalized "why you'll love it" explanations (free)
-        │
-        ▼
-  Redis Cache            ← Sub-200ms on repeat queries
-        │
-        ▼
-  React Frontend         ← Cinematic dark UI
-```
-
----
+\```
+Query → Groq (parse intent) → embed locally → Pinecone search
+      → re-rank by watch history → Groq (write explanations) → cache → frontend
+\```
 
 ## Stack
 
-| Layer | Technology |
-|-------|-----------|
-| Backend API | FastAPI + Uvicorn |
-| Embeddings | sentence-transformers `all-MiniLM-L6-v2` (local) |
-| LLM | Groq free tier — LLaMA-3.1-8B-Instant |
-| Vector DB | Pinecone serverless (free starter) |
-| Cache | Redis |
-| Frontend | React 18 + Zustand + TypeScript |
-| Containers | Docker + Docker Compose |
-| CI/CD | GCP Cloud Build → Cloud Run |
-| Movie Data | TMDB API (free) |
+Backend is FastAPI on Uvicorn. Frontend is React 18 with Zustand for state and TypeScript throughout. Everything's containerized with Docker Compose for local dev, and deploys to Cloud Run via GCP Cloud Build.
 
----
+## Getting it running
 
-## Quick Start
+You'll need three free API keys:
 
-### 1. Get your free API keys (5 minutes)
+1. **Groq** — console.groq.com, sign up, grab a key from API Keys. No card needed.
+2. **Pinecone** — app.pinecone.io, create a free serverless index.
+3. **TMDB** — themoviedb.org/settings/api, this one's free indefinitely, not just a trial.
 
-| Key | Where to get it |
-|-----|----------------|
-| `GROQ_API_KEY` | [console.groq.com](https://console.groq.com) → API Keys → Create (free, no card) |
-| `PINECONE_API_KEY` | [app.pinecone.io](https://app.pinecone.io) → Create index (free starter) |
-| `TMDB_API_KEY` | [themoviedb.org/settings/api](https://www.themoviedb.org/settings/api) (free forever) |
+Then:
 
-### 2. Configure
-
-```bash
+\```bash
 git clone <repo> && cd cinemate
 cp backend/.env.example backend/.env
-# Fill in your 3 free API keys
-```
-
-### 3. Run
-
-```bash
+# drop your three keys into .env
 docker-compose up --build
-```
+\```
 
-- Frontend → http://localhost:3000  
-- API docs → http://localhost:8000/docs
+Frontend lands on `localhost:3000`, API docs are at `localhost:8000/docs`.
 
-### 4. Seed movies into Pinecone
+Before you can get recommendations, you need to seed the index:
 
-```bash
-# First time only — downloads ~90MB embedding model, then indexes movies
+\```bash
 cd backend
 pip install -r requirements.txt
-python scripts/seed_pinecone.py --pages 50    # ~1K movies, fast
-python scripts/seed_pinecone.py --pages 500   # ~10K movies, ~15 min
-```
+python scripts/seed_pinecone.py --pages 50    # ~1K movies, a couple minutes
+python scripts/seed_pinecone.py --pages 500   # ~10K movies, more like 15 min
+\```
 
----
+First run downloads the embedding model (~90MB), so that's a one-time wait.
 
-## API
+## Using the API
 
-### `POST /api/v1/recommendations/`
+The main endpoint is `POST /api/v1/recommendations/`. Send it a query, optionally a user ID and watch history for personalization, plus any filters:
 
-```json
+\```json
 {
   "query": "mind-bending sci-fi with unreliable narrators",
   "user_id": "user_abc123",
@@ -117,47 +71,27 @@ python scripts/seed_pinecone.py --pages 500   # ~10K movies, ~15 min
     "min_rating": 7.0
   }
 }
-```
+\```
 
-Returns movies with similarity scores + LLaMA-generated personalized explanations.
+You get back a ranked list with similarity scores and a short LLM-written explanation for each one.
 
-### `POST /api/v1/recommendations/similar` — find movies similar to a given ID  
-### `GET /health` — service health + embedding model status  
-### `GET /api/v1/stats` — Pinecone index stats  
+There's also `POST /api/v1/recommendations/similar` if you just want movies similar to a specific title, `GET /health` for checking the embedding model loaded correctly, and `GET /api/v1/stats` for Pinecone index stats.
 
----
+## Switching embedding models
 
-## Swap embedding model (optional)
+Default is `all-MiniLM-L6-v2` at 384 dimensions, which is fast and good enough for most cases. If you want better quality and don't mind the extra size (~420MB), swap to `all-mpnet-base-v2` at 768 dimensions in `.env`. One catch: if you change this after you've already seeded the index, you have to re-seed. The vector dimensions have to match or Pinecone will reject them.
 
-Edit `backend/.env`:
+## Deploying
 
-```bash
-# Faster, smaller (default)
-EMBEDDING_MODEL=all-MiniLM-L6-v2
-EMBEDDING_DIMENSIONS=384
-
-# Better quality, larger (~420 MB)
-EMBEDDING_MODEL=all-mpnet-base-v2
-EMBEDDING_DIMENSIONS=768
-```
-
-> If you change the model after seeding, re-run the seed script — vectors must match dimensions.
-
----
-
-## Deploy to GCP
-
-```bash
+\```bash
 gcloud config set project YOUR_PROJECT_ID
 echo -n "$GROQ_API_KEY" | gcloud secrets create groq-api-key --data-file=-
 echo -n "$PINECONE_API_KEY" | gcloud secrets create pinecone-api-key --data-file=-
 gcloud builds submit --config infrastructure/cloudbuild.yaml
-```
+\```
 
----
+## Tests
 
-## Testing
-
-```bash
+\```bash
 cd backend && pytest tests/ -v
-```
+\```
